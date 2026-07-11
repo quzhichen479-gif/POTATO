@@ -1,0 +1,57 @@
+seed: 47
+output_dir: runs/e1_transformer
+
+data:
+  manifest: null
+  root: null
+  train_split: train
+  val_split: val
+  test_split: test
+  topk_per_modality: 64
+  appearance_dim: 0
+  physics_dim: 0
+  positive_iou: 0.50
+  pair_candidate_iou: 0.05
+  num_workers: 4
+
+model:
+  d_model: 128
+  nhead: 4
+  num_layers: 2
+  dim_feedforward: 256
+  dropout: 0.10
+  pair_dim: 64
+
+loss:
+  valid_weight: 1.0
+  iou_weight: 1.0
+  pair_weight: 1.0
+  rescue_weight: 1.0
+  protect_weight: 1.0
+  focal_alpha: 0.25
+  focal_gamma: 2.0
+
+train:
+  batch_size: 16
+  epochs: 80
+  lr: 0.0003
+  weight_decay: 0.0001
+  grad_clip_norm: 5.0
+  amp: true
+  early_stop_patience: 15
+
+arbitration:
+  rgb_raw_score_floor: 0.25
+  rgb_valid_threshold: 0.50
+  rgb_protect_threshold: 0.50
+  pol_valid_threshold: 0.50
+  pol_rescue_threshold: 0.50
+  pair_same_threshold: 0.50
+  replace_margin: 0.05
+  final_nms_iou: 0.60
+  merge_duplicates: true
+
+evaluation:
+  match_iou: 0.50
+  base_conf: 0.25
+  save_predictions: true
