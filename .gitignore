@@ -1,0 +1,25 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Local data and large artifacts
+data/
+cache/
+*.npz
+*.npy
+*.pt
+*.pth
+*.onnx
+
+# Experiment outputs
+runs/
+wandb/
+
+# IDE and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
