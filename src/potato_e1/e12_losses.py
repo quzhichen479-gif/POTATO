@@ -53,11 +53,20 @@ def compute_e12_loss(
     safe_mask = batch["safe_mask"]
     alpha = float(config.get("residual_alpha", 0.5))
 
-    setwise_loss = F.cross_entropy(
+    setwise_per_image = F.cross_entropy(
         output.restore_logits,
         batch["restore_target_index"],
         label_smoothing=float(config.get("label_smoothing", 0.0)),
+        reduction="none",
     )
+    target_is_none = batch["restore_target_index"] == 0
+    setwise_weight = torch.where(
+        target_is_none,
+        torch.full_like(setwise_per_image, float(config.get("none_image_weight", 0.25))),
+        torch.full_like(setwise_per_image, float(config.get("restore_image_weight", 1.0))),
+    )
+    setwise_loss = (setwise_per_image * setwise_weight).sum() / setwise_weight.sum().clamp_min(1e-8)
+
     quality_loss = _masked_smooth_l1(
         output.rollback_quality,
         batch["rollback_iou_target"],
