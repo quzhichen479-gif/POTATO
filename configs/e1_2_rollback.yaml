@@ -8,7 +8,7 @@ data:
   val_split: val
   test_split: test
   topk_per_modality: 64
-  max_safe_candidates: 64
+  max_safe_candidates: 128
   max_rollback_candidates: 128
   appearance_dim: 0
   candidate_conf_min: 0.01
