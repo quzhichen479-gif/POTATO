@@ -15,6 +15,10 @@ data:
   base_conf: 0.25
   base_nms_iou: 0.30
   positive_iou: 0.50
+  include_nms: true
+  include_low_conf: true
+  include_rgb: true
+  include_pol: true
   num_workers: 4
 
 model:
