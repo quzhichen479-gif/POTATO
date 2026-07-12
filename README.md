@@ -1,244 +1,287 @@
-# POTATO — E1 Transformer Candidate Arbitrator
+# POTATO — E1.1 Fixed-NMS-Anchored Residual Transformer
 
-本仓库当前锁定 PoTATO RGB–POL 多模态检测的第一项工程：**E1：缓存候选上的轻量 Transformer 仲裁器**。
+本仓库当前工作的唯一主线是：
 
-E1 不重新训练 RGB/POL 检测器，也不做输入级 early fusion。它读取两个冻结单模态专家导出的候选缓存，学习四件事：
+> **E1.1：以 fixed cross-modal NMS 为不可删除安全集合的轻量残差 Transformer。**
 
-1. 判断 RGB 与 POL 候选是否属于同一真实目标；
-2. 预测每个候选的真实性与定位质量；
-3. 识别值得接纳的 POL-only 补充候选；
-4. 显式保护 RGB 已正确候选，降低融合破坏率。
+旧 E1 的全权候选仲裁器已经完成 validation 诊断，但没有通过验收门槛。E1.1 不再允许 Transformer 删除、替换或移动 fixed-NMS 已保留候选，只允许：
 
-当前研究结论已经排除“整图/整目标 RGB–POL 硬切换”作为主线。物理量只作为候选可靠性的辅助特征，不直接决定最终模态。
+1. 对安全集合做**有界分数残差重排序**；
+2. 从安全集合之外保守接纳每图至多 1 个 POL 补充候选。
+
+物理特征已经在 A6 中被实验证伪，不进入 E1.1。
 
 ---
 
-## 1. 已锁定的诊断基线
+## 1. E1 失败结论
 
-使用 seed 47 的 RGB/POL YOLOv5m，在官方 2,000 张测试图像、5,384 个 GT 上：
+`full_train_debug` validation 缓存上 3 个 arbitrator seed 的均值：
 
-| 系统 | Recall | FP/image | AP50:95 | Destruction |
+| 方法 | AP50:95 | Recall | FP/image | Destruction |
 |---|---:|---:|---:|---:|
-| RGB @ 0.25 | 0.8224 | 0.248 | 0.4410 | 0.0672 |
-| POL @ 0.25 | 0.7762 | 0.240 | 0.4287 | 0.1197 |
-| 固定 cross-modal NMS=0.3, conf=0.25 | 0.8601 | 0.252 | 0.4547 | 0.0244 |
-| 严格 FP 匹配诊断上界 | 0.8596 | 0.248 | 0.4547 | 0.0251 |
-| GT Oracle | 0.8817 | — | — | 0.0000 |
+| 严格诊断门槛 | 0.4547 | 0.8596 | 0.248 | 2.51% |
+| 同缓存 fixed NMS=0.3 | 0.4399 | 0.8701 | 0.195 | 3.58% |
+| A5，无物理 | **0.4653** | 0.8482 | 0.2256 | 6.06% |
+| A6，含物理 | 0.4529 | 0.8485 | 0.2311 | 6.08% |
 
-RGB-only 目标为 568 个，POL-only 目标为 319 个，两者共同漏检 637 个。
+结论：
 
-E1 的最低竞争对象不是 RGB，而是 **固定 cross-modal NMS=0.3**。所有阈值必须在验证集确定，测试集只运行一次锁定配置。
+- A5 提高 AP，但以 Recall 下降和 Destruction 上升为代价；
+- A2–A6 没有任何搜索点同时满足 FP 与 Destruction 约束；
+- A6 相比 A5，AP 下降、FP 上升、Recall 几乎不变、Destruction 不改善；
+- 物理特征已否决；
+- 当前 test 尚未运行，必须继续封存；
+- 正式 group-aware detector OOF 仍为 0/14，当前只允许 debug validation 筛选结构。
 
----
-
-## 2. E1 方法定义
-
-### 2.1 输入
-
-每张图像包含两组经单模态后处理后的低阈值候选：
-
-- RGB 候选：框、类别、原始分数、可选检测特征；
-- POL 候选：框、类别、原始分数、可选检测特征、候选区域物理统计；
-- 训练时额外提供 GT 框和类别。
-
-建议缓存单模态 NMS 后、较低置信度阈值的候选，初版：
-
-- `candidate_conf = 0.01`
-- `single_modal_nms = 0.60`
-- `topk_per_modality = 64`
-
-不得使用测试 GT 生成推理特征。物理统计必须在预测候选框及其上下文区域上提取，而不是在 GT 框上提取。
-
-### 2.2 Transformer 输出
-
-对拼接后的 RGB/POL 候选 token，轻量 Transformer 预测：
-
-- `valid_logit`：候选是否为真实目标；
-- `iou_pred`：候选与匹配 GT 的定位质量；
-- `rescue_logit`：POL 候选是否能补充 RGB 未覆盖的 GT；
-- `protect_logit`：RGB 候选是否必须保护；
-- `pair_same_logit[i,j]`：RGB/POL 候选是否对应同一 GT。
-
-### 2.3 推理规则
-
-推理顺序必须保持为：
-
-1. **Protect RGB**：先保留高可信 RGB 候选；
-2. **Match pairs**：利用 `pair_same_logit` 匹配跨模态重复候选；
-3. **Merge/select**：重复候选按预测定位质量融合或选框，不能仅比较未校准原始分数；
-4. **Admit POL**：未匹配 POL 只有在 `valid` 与 `rescue` 同时满足阈值时才准入；
-5. **Final cleanup**：执行轻量最终去重，避免重新退化成普通 NMS 堆叠。
-
-默认策略是 RGB 锚定。POL 候选不能仅因分数更高而替换被保护的 RGB 候选。
+旧 E1 代码保留用于失败消融复现，不再作为默认入口。
 
 ---
 
-## 3. 仓库结构
+## 2. E1.1 核心结构
+
+### 2.1 不可删除安全集合
+
+```text
+eligible = RGB/POL union with raw score >= 0.25
+safe_set = class-wise NMS(eligible, IoU=0.30)
+```
+
+E1.1 强制：
+
+```text
+safe_set ⊆ final_set
+```
+
+安全集合的 box 和 class 不得改变。
+
+### 2.2 有界分数残差
+
+Transformer 输出 `score_delta`，最终分数为：
+
+```text
+adjusted_score = sigmoid(logit(raw_score) + alpha * tanh(score_delta))
+```
+
+因此 logit 修正绝对值永远不超过 `alpha`。默认 `alpha=0.5`，只允许在 validation 扫描 `{0.25, 0.5, 1.0}`。
+
+### 2.3 POL 增量准入
+
+未进入安全集合的 POL 候选只有同时满足以下条件才允许加入：
+
+```text
+rescue_probability >= rescue_threshold
+predicted_iou >= extra_quality_threshold
+adjusted_score >= extra_score_floor
+same-class overlap with selected boxes <= extra_overlap_iou
+```
+
+并限制：
+
+```text
+max_extra_per_image <= 1
+```
+
+Transformer 没有 delete head、replace head 或 protect head。非退化由结构保证，而不是依赖 soft loss 学习。
+
+---
+
+## 3. 代码结构
 
 ```text
 POTATO/
-├─ configs/e1_transformer.yaml
-├─ docs/E1_IMPLEMENTATION_SPEC.md
-├─ scripts/validate_cache.py
+├─ AGENTS.md
+├─ configs/
+│  ├─ e1_transformer.yaml          # 旧 E1，仅供失败消融复现
+│  └─ e1_1_residual.yaml           # 当前默认配置
+├─ docs/
+│  ├─ E1_IMPLEMENTATION_SPEC.md    # 旧 E1 规范
+│  └─ E1_1_IMPLEMENTATION_SPEC.md  # 当前工程合同
 ├─ src/potato_e1/
-│  ├─ schema.py
-│  ├─ dataset.py
-│  ├─ targets.py
-│  ├─ model.py
-│  ├─ losses.py
-│  ├─ arbitration.py
-│  ├─ train.py
-│  └─ evaluate.py
-└─ tests/test_model_shapes.py
+│  ├─ e11_dataset.py
+│  ├─ e11_model.py
+│  ├─ e11_losses.py
+│  ├─ e11_arbitration.py
+│  ├─ train_e11.py
+│  └─ evaluate_e11.py
+└─ tests/test_e11_residual.py
 ```
 
 ---
 
-## 4. 候选缓存格式
-
-数据根目录包含一个 `manifest.jsonl` 与若干 `.npz`：
-
-```json
-{"sample_id":"exp03_frame_000123","cache":"samples/exp03_frame_000123.npz","split":"train","group":"exp03","oof_fold":0}
-```
-
-每个 `.npz` 至少包含：
-
-```text
-rgb_boxes       float32 [Nr, 4]  normalized xyxy
-rgb_scores      float32 [Nr]
-rgb_classes     int64   [Nr]
-pol_boxes       float32 [Np, 4]
-pol_scores      float32 [Np]
-pol_classes     int64   [Np]
-gt_boxes        float32 [G, 4]
-gt_classes      int64   [G]
-```
-
-可选字段：
-
-```text
-rgb_features    float32 [Nr, Fa]
-pol_features    float32 [Np, Fa]
-pol_physics     float32 [Np, Fp]
-```
-
-约束：
-
-- 框必须是 `[0,1]` 归一化 `xyxy`；
-- 所有数组必须有限值；
-- 候选按分数降序或由数据加载器统一排序；
-- `train/val/test` 的候选必须来自同一固定检测器配置；
-- 论文正式结果的仲裁器训练缓存应优先使用 detector OOF 预测，避免元学习器读取检测器对自身训练图像的过拟合输出；
-- `test` 绝不能参与阈值、NMS 或损失权重选择。
-
----
-
-## 5. 安装与运行
+## 4. 安装与基础检查
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -e .[dev]
+pytest -q
 ```
 
-验证缓存：
+生成 toy cache：
 
 ```bash
+python scripts/make_toy_cache.py --output /tmp/potato_e1_toy
 python scripts/validate_cache.py \
-  --manifest /path/to/cache/manifest.jsonl \
-  --root /path/to/cache
+  --manifest /tmp/potato_e1_toy/manifest.jsonl \
+  --root /tmp/potato_e1_toy
 ```
 
-训练：
+---
+
+## 5. E1.1 训练
 
 ```bash
-python -m potato_e1.train \
-  --config configs/e1_transformer.yaml \
+python -m potato_e1.train_e11 \
+  --config configs/e1_1_residual.yaml \
   data.manifest=/path/to/cache/manifest.jsonl \
-  data.root=/path/to/cache
+  data.root=/path/to/cache \
+  data.appearance_dim=<candidate_feature_dim> \
+  data.num_workers=0 \
+  output_dir=runs/e1_1_seed47
 ```
 
-评估：
+首轮必须先在 toy cache 做：
+
+- 单 batch overfit；
+- `quality/score/ranking/rescue/delta_reg` 五项损失均可计算；
+- 总损失下降；
+- safe-set invariant 测试通过。
+
+---
+
+## 6. Validation 评估
 
 ```bash
-python -m potato_e1.evaluate \
-  --config configs/e1_transformer.yaml \
-  --checkpoint runs/e1/best.pt \
-  --split val
+python -m potato_e1.evaluate_e11 \
+  --config configs/e1_1_residual.yaml \
+  --checkpoint runs/e1_1_seed47/best.pt \
+  --split val \
+  --output runs/e1_1_seed47/val_predictions.jsonl
 ```
 
-当前代码提供模型、标签、损失、缓存数据集、仲裁推理和基础评估骨架。检测器候选导出与 COCO AP 接口需要根据现有 YOLOv5 工程路径接入，具体要求见 `docs/E1_IMPLEMENTATION_SPEC.md`。
+评估会同时输出：
+
+- 同缓存 fixed-NMS baseline；
+- E1.1；
+- Recall、Precision、FP/image、Destruction、Rescue；
+- 每图 safe count 与 extra count；
+- safe-set box/class 不变断言；
+- 可供项目 COCO evaluator 计算 AP50/AP75/AP50:95 的逐图预测。
+
+当前基础入口不替代项目已有 COCO AP 评估器。Codex 必须接入同一套官方评估脚本，不能自行使用不同口径。
 
 ---
 
-## 6. Codex 必须按顺序完成的工程任务
+## 7. Test 锁定保护
 
-### P0：让端到端最小闭环跑通
+Test 不允许直接运行。必须提供 validation 生成的锁定文件：
 
-- [ ] 接入现有 RGB/POL YOLOv5m 权重，导出 train/val/test 候选缓存；
-- [ ] 将检测头对应候选位置的 neck/head 特征写入 `rgb_features/pol_features`；
-- [ ] 在预测 POL 框和 1.5× 上下文区域提取物理统计，写入 `pol_physics`；
-- [ ] 运行 `validate_cache.py`，保证所有样本无 NaN、shape 闭合、框合法；
-- [ ] 运行单 batch overfit，确认总损失和五个子损失均能下降；
-- [ ] 在 validation 上完成阈值搜索并冻结 `thresholds.locked.yaml`；
-- [ ] 在 test 上只运行锁定阈值一次。
+```yaml
+locked: true
+arbitration:
+  base_conf: 0.25
+  base_nms_iou: 0.30
+  residual_alpha: 0.50
+  rescue_threshold: 0.90
+  extra_quality_threshold: 0.50
+  extra_score_floor: 0.15
+  extra_overlap_iou: 0.30
+  max_extra_per_image: 1
+```
 
-### P1：完成公平基线
+运行：
 
-必须由同一缓存复现：
+```bash
+python -m potato_e1.evaluate_e11 \
+  --config configs/e1_1_residual.yaml \
+  --checkpoint runs/e1_1_seed47/best.pt \
+  --split test \
+  --thresholds runs/e1_1_locked/thresholds.locked.yaml
+```
 
-- [ ] RGB-only；
-- [ ] POL-only；
-- [ ] union + fixed cross-modal NMS，至少扫描 0.3/0.4/0.5/0.6，但只在 val 选取；
-- [ ] score calibration + NMS；
-- [ ] Transformer 无物理特征；
-- [ ] Transformer + 物理特征。
+没有顶层 `locked: true` 时，程序必须拒绝 test。
 
-### P2：完成消融
-
-按顺序启用：
-
-- [ ] A2：仅 `valid + iou`；
-- [ ] A3：A2 + `pair_same`；
-- [ ] A4：A3 + `rescue`；
-- [ ] A5：A4 + `protect`；
-- [ ] A6：A5 + `pol_physics`。
-
-物理特征若不能稳定优于 A5，不得为了“物理创新”强行保留。
+当前阶段**禁止运行 test**，因为正式 group-aware OOF detector cache 尚未完成。
 
 ---
 
-## 7. 验收标准
+## 8. 必须按顺序完成的消融
 
-E1 第一版必须满足：
+| 版本 | 组件 | 目的 |
+|---|---|---|
+| R0 | 同缓存 fixed NMS=0.3 | 安全基线 |
+| R1 | R0 + bounded score residual | 验证 A5 的排序价值 |
+| R2 | R1 + IoU quality loss | 提升 AP50:95/AP75 |
+| R3 | R2 + pairwise ranking loss | 强化候选排序 |
+| R4 | R3 + 每图最多 1 个 POL extra | 在剩余 FP 预算内补召回 |
 
-1. 在 validation 锁定阈值后，test 上不重新调参；
-2. 在 `FP/image <= RGB FP/image + 0.01` 条件下，与固定 cross-modal NMS=0.3 比较；
-3. 至少满足以下一项，并且其余指标不显著恶化：
-   - 同 FP 下 Recall 与 AP50:95 同时提高；
-   - 同 Recall 下 FP/image 降低；
-   - 同 AP 下 Destruction 明显降低；
-4. 报告 Recall、Precision、FP/image、AP50、AP50:95、Destruction、Rescue、净 TP；
-5. 按完整采集实验做 cluster bootstrap 95% CI；
-6. 至少 3 个 arbitrator seed；
-7. 保存所有失败消融和完整阈值曲线。
+本轮不实现 R5 学习式重复匹配。
 
-当前必须击败的固定基线：`Recall≈0.8601, FP/image≈0.252, AP50:95≈0.4547, Destruction≈0.0244`。
+建议开关：
 
----
+- R1：`quality_weight=0, ranking_weight=0, rescue_weight=0, max_extra_per_image=0`
+- R2：开启 `quality_weight`；
+- R3：开启 `ranking_weight`；
+- R4：开启 `rescue_weight` 且 `max_extra_per_image=1`。
 
-## 8. 明确禁止
-
-- 禁止使用 test 选择置信度、pair 阈值、NMS 阈值或损失权重；
-- 禁止把 GT 框物理量作为部署输入；
-- 禁止把 RGB/POL 未校准原始置信度直接当概率比较；
-- 禁止将共同漏检目标的 Rescue=0 误解为仲裁器失败：E1 只重组已有候选，不能创造新候选；
-- 禁止在 E1 同时加入 P2、SAHI、CARAFE、DySample、小波、loss 替换等无关变量；
-- 禁止只报告最佳 seed 或最佳阈值。
+每个版本至少 3 个 arbitrator seed，保存逐 seed 与均值，不得只报告最佳 seed。
 
 ---
 
-## 9. 下一阶段边界
+## 9. 验收门槛
 
-只有 E1 在固定 FP 预算下稳定优于 fixed NMS，才进入 E2：将候选仲裁器迁移到 YOLO26s 的 one-to-one 推理路径。共同漏检的 637 个目标属于后续“特征交互生成新候选”问题，不在 E1 范围内。
+严格门槛保持不变：
+
+```text
+AP50:95 >= 0.4547
+Recall >= 0.8596
+FP/image <= 0.248
+Destruction <= 0.0251
+```
+
+阶段门槛：
+
+- R1–R3：Recall 相比 R0 下降不超过 0.1 个百分点；Destruction 不高于 R0；AP 必须提高；
+- R4：FP/image 仍不超过 0.248，Recall 不下降，Destruction 应下降；
+- A/B 对比必须来自同一 cache、同一 evaluator、同一 split；
+- 所有搜索点与失败结果完整保存。
+
+只有 debug validation 上有版本通过全部门槛，才值得生成 14/14 group-aware detector OOF cache。
+
+---
+
+## 10. Codex 当前任务
+
+Codex 读取顺序：
+
+1. `README.md`
+2. `AGENTS.md`
+3. `docs/E1_1_IMPLEMENTATION_SPEC.md`
+4. GitHub E1.1 issue
+
+执行要求：
+
+```text
+先运行 pytest 和 toy-cache smoke test；
+修复所有 E1.1 入口问题；
+在 full_train_debug validation cache 上完成 R0→R4；
+复现同缓存 fixed NMS=0.3；
+用项目原 COCO evaluator 计算 AP50/AP75/AP50:95；
+保存完整 operating curves；
+三个 arbitrator seed 全部报告；
+不得运行 test；
+不得生成正式 OOF，除非 debug validation 已通过全部门槛。
+```
+
+---
+
+## 11. 明确禁止
+
+- 禁止恢复 A6 物理特征；
+- 禁止让 Transformer 删除、替换、移动或融合 safe-set 候选；
+- 禁止使用 test 选择任何阈值、损失权重、checkpoint 或特征；
+- 禁止只报告最佳 seed 或最佳 operating point；
+- 禁止同时引入 P2、SAHI、CARAFE、DySample、小波、检测器 loss 修改或 YOLO26 迁移；
+- 禁止提交 dataset、cache、checkpoint、weights 或 `runs/`。
+
+完整细节见 `docs/E1_1_IMPLEMENTATION_SPEC.md`。
