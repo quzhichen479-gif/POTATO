@@ -18,7 +18,7 @@ from .e11_arbitration import (
 )
 from .e11_dataset import collate_e11_candidate_batch
 from .evaluate import greedy_match
-from .train import move_batch
+from .train import apply_overrides, move_batch
 from .train_e11 import build_e11_dataset, build_e11_model
 
 
@@ -134,10 +134,12 @@ def main() -> None:
     parser.add_argument("--split", default="val")
     parser.add_argument("--thresholds", default=None, help="locked validation YAML")
     parser.add_argument("--output", default=None)
+    parser.add_argument("overrides", nargs="*")
     args = parser.parse_args()
 
     with Path(args.config).open("r", encoding="utf-8") as handle:
         config = yaml.safe_load(handle)
+    apply_overrides(config, args.overrides)
 
     locked_payload: dict[str, Any] | None = None
     if args.thresholds:
@@ -247,13 +249,15 @@ def main() -> None:
                 }
             )
 
+    baseline_dict = baseline_metrics.as_dict()
+    method_dict = method_metrics.as_dict()
     metrics = {
         "method": "E1.1 fixed-NMS-anchored residual Transformer",
         "split": args.split,
-        "baseline": baseline_metrics.as_dict(),
-        "e11": method_metrics.as_dict(),
+        "baseline": baseline_dict,
+        "e11": method_dict,
         "delta": {
-            key: method_metrics.as_dict()[key] - baseline_metrics.as_dict()[key]
+            key: method_dict[key] - baseline_dict[key]
             for key in ("recall", "precision", "fp_per_image", "destruction", "rescue")
         },
         "total_extra": total_extra,
