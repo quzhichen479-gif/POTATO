@@ -44,6 +44,27 @@ def _masked_smooth_l1(
     return F.smooth_l1_loss(prediction[mask], target[mask], beta=beta)
 
 
+def _balanced_restore_score_loss(
+    prediction: torch.Tensor,
+    target: torch.Tensor,
+    mask: torch.Tensor,
+    negative_weight: float,
+) -> torch.Tensor:
+    if not mask.any():
+        return prediction.sum() * 0.0
+    element = F.smooth_l1_loss(prediction, target, beta=0.1, reduction="none")
+    positive = mask & (target > 0)
+    negative = mask & ~positive
+    terms: list[torch.Tensor] = []
+    if positive.any():
+        terms.append(element[positive].mean())
+    if negative.any():
+        terms.append(float(negative_weight) * element[negative].mean())
+    if not terms:
+        return prediction.sum() * 0.0
+    return torch.stack(terms).sum()
+
+
 def compute_e12_loss(
     output: RollbackTransformerOutput,
     batch: dict[str, torch.Tensor],
@@ -73,10 +94,11 @@ def compute_e12_loss(
         rollback_mask,
     )
     restore_score_prediction = torch.sigmoid(output.restore_score_logit)
-    restore_score_loss = _masked_smooth_l1(
+    restore_score_loss = _balanced_restore_score_loss(
         restore_score_prediction,
         batch["restore_score_target"],
         rollback_mask,
+        negative_weight=float(config.get("restore_score_negative_weight", 0.25)),
     )
 
     if rollback_mask.any():
