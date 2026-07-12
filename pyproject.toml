@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "potato-e1"
-version = "0.1.0"
-description = "Lightweight Transformer candidate arbitrator for RGB-polarization detection"
+version = "0.2.0"
+description = "Fixed-NMS-anchored residual Transformer for RGB-polarization candidate arbitration"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
