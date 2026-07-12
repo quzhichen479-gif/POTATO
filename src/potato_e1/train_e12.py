@@ -32,6 +32,10 @@ def build_e12_dataset(config: dict[str, Any], split: str) -> RollbackCacheDatase
         base_conf=float(data.get("base_conf", 0.25)),
         base_nms_iou=float(data.get("base_nms_iou", 0.30)),
         positive_iou=float(data.get("positive_iou", 0.50)),
+        include_nms=bool(data.get("include_nms", True)),
+        include_low_conf=bool(data.get("include_low_conf", True)),
+        include_rgb=bool(data.get("include_rgb", True)),
+        include_pol=bool(data.get("include_pol", True)),
     )
 
 
