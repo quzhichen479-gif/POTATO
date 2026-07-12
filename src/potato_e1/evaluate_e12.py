@@ -119,8 +119,14 @@ def selected_restore_log(
     iou, matched_gt = match_candidates(box, class_id, gt_boxes, gt_classes)
     source = result.restore_source
     context_index = int(batch["rollback_context_indices"][0, local_index])
+    if source == SOURCE_NMS:
+        source_name = "nms_suppressed"
+    elif source == SOURCE_LOW_CONF:
+        source_name = "low_conf"
+    else:
+        source_name = "unknown"
     return {
-        "restore_source": "nms_suppressed" if source == SOURCE_NMS else "low_conf",
+        "restore_source": source_name,
         "modality": "rgb" if result.restore_modality == 0 else "pol",
         "suppressor_index": context_index if source == SOURCE_NMS else -1,
         "context_index": context_index,
@@ -193,7 +199,7 @@ def main() -> None:
     method_destroyed = 0
     restored_protected = 0
     newly_destroyed = 0
-    restore_source_counts = {"nms_suppressed": 0, "low_conf": 0}
+    restore_source_counts = {"nms_suppressed": 0, "low_conf": 0, "unknown": 0}
     restore_modality_counts = {"rgb": 0, "pol": 0}
     rows: list[dict[str, Any]] = []
 
