@@ -33,6 +33,8 @@ model:
 
 loss:
   set_weight: 1.0
+  none_image_weight: 0.25
+  restore_image_weight: 1.0
   quality_weight: 1.0
   restore_score_weight: 1.0
   edge_weight: 0.25
