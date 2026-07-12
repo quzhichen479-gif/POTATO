@@ -1,0 +1,72 @@
+seed: 47
+output_dir: runs/e1_2_seed47
+
+data:
+  manifest: null
+  root: null
+  train_split: train
+  val_split: val
+  test_split: test
+  topk_per_modality: 64
+  max_safe_candidates: 64
+  max_rollback_candidates: 128
+  appearance_dim: 0
+  candidate_conf_min: 0.01
+  base_conf: 0.25
+  base_nms_iou: 0.30
+  positive_iou: 0.50
+  num_workers: 4
+
+model:
+  d_model: 128
+  nhead: 4
+  safe_layers: 1
+  rollback_layers: 2
+  dim_feedforward: 256
+  dropout: 0.10
+  edge_dim: 8
+  edge_classes: 4
+
+loss:
+  set_weight: 1.0
+  quality_weight: 1.0
+  restore_score_weight: 1.0
+  edge_weight: 0.25
+  safe_score_weight: 0.5
+  safe_ranking_weight: 0.5
+  delta_reg_weight: 0.02
+  residual_alpha: 0.50
+  ranking_margin: 0.10
+  label_smoothing: 0.0
+
+train:
+  batch_size: 16
+  epochs: 80
+  lr: 0.0003
+  weight_decay: 0.0001
+  grad_clip_norm: 5.0
+  amp: true
+  early_stop_patience: 15
+
+arbitration:
+  residual_alpha: 0.50
+  restore_probability_threshold: 0.50
+  restore_quality_threshold: 0.50
+  restore_score_threshold: 0.10
+  max_restore_per_image: 1
+
+evaluation:
+  match_iou: 0.50
+  base_conf: 0.25
+  require_locked_thresholds_for_test: true
+  save_predictions: true
+
+search:
+  residual_alpha: [0.25, 0.50, 1.00]
+  restore_probability_threshold: [0.30, 0.40, 0.50, 0.60, 0.70, 0.80]
+  restore_quality_threshold: [0.30, 0.40, 0.50, 0.60]
+  restore_score_threshold: [0.05, 0.10, 0.15, 0.20]
+  recall_floor: 0.8596
+  fp_per_image_limit: 0.248
+  destruction_limit: 0.0251
+  ap50_95_floor: 0.4547
