@@ -29,6 +29,10 @@ class RollbackCacheDataset(Dataset[dict[str, Any]]):
         base_conf: float = 0.25,
         base_nms_iou: float = 0.30,
         positive_iou: float = 0.50,
+        include_nms: bool = True,
+        include_low_conf: bool = True,
+        include_rgb: bool = True,
+        include_pol: bool = True,
     ) -> None:
         self.root = Path(root)
         self.topk = int(topk_per_modality)
@@ -39,6 +43,10 @@ class RollbackCacheDataset(Dataset[dict[str, Any]]):
         self.base_conf = float(base_conf)
         self.base_nms_iou = float(base_nms_iou)
         self.positive_iou = float(positive_iou)
+        self.include_nms = bool(include_nms)
+        self.include_low_conf = bool(include_low_conf)
+        self.include_rgb = bool(include_rgb)
+        self.include_pol = bool(include_pol)
 
         records: list[CacheRecord] = []
         with Path(manifest).open("r", encoding="utf-8") as handle:
@@ -116,12 +124,17 @@ class RollbackCacheDataset(Dataset[dict[str, Any]]):
             classes,
             gt_boxes,
             gt_classes,
+            modality=modality,
             candidate_conf_min=self.candidate_conf_min,
             base_conf=self.base_conf,
             base_nms_iou=self.base_nms_iou,
             positive_iou=self.positive_iou,
             max_safe_candidates=self.max_safe,
             max_rollback_candidates=self.max_rollback,
+            include_nms=self.include_nms,
+            include_low_conf=self.include_low_conf,
+            include_rgb=self.include_rgb,
+            include_pol=self.include_pol,
         )
         edge_features = build_edge_features(
             boxes,
