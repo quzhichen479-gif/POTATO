@@ -1,20 +1,43 @@
 # Codex instructions for POTATO
 
-Read `README.md` first, then `docs/E1_IMPLEMENTATION_SPEC.md`, and implement GitHub issue #1 in that order.
+Read in this exact order:
 
-## Scope
+1. `README.md`
+2. `docs/E1_1_IMPLEMENTATION_SPEC.md`
+3. the current E1.1 GitHub issue
 
-Current scope is only E1: frozen RGB/POL detector candidate caching plus a lightweight Transformer candidate arbitrator. Do not introduce input-level fusion, P2 heads, SAHI, CARAFE, DySample, wavelets, new detector losses, or YOLO26 migration in this milestone.
+The old `docs/E1_IMPLEMENTATION_SPEC.md` and `configs/e1_transformer.yaml` are retained only to reproduce the failed E1 A2–A6 ablations. Do not continue tuning the old full-authority arbitrator.
+
+## Current scope
+
+Current scope is only **E1.1: fixed-NMS-anchored residual Transformer**.
+
+The fixed cross-modal NMS output is an immutable safe set. The learned model may:
+
+- apply a bounded score residual for ranking;
+- estimate IoU quality;
+- admit at most one conservative POL extra per image.
+
+The learned model may not:
+
+- delete safe-set candidates;
+- replace RGB/POL safe candidates;
+- move or merge safe boxes;
+- modify safe classes;
+- use physical features.
 
 ## Non-negotiable rules
 
-1. Never use test data to select thresholds, loss weights, NMS values, checkpoints, or feature sets.
-2. Never use GT boxes to compute deployable physical features. Use predicted candidate boxes and their context.
-3. Reproduce RGB-only, POL-only, and fixed cross-modal NMS from exactly the same cache before claiming a gain.
-4. Complete A5 without physical features before A6 with physical features.
-5. Keep failed ablations and full threshold curves.
-6. Do not commit datasets, `.npz` caches, weights, checkpoints, or `runs/` artifacts.
-7. Add tests for every change to target construction or arbitration logic.
+1. Never use test data to select thresholds, losses, checkpoints, NMS, alpha, features, or ablations.
+2. Keep test sealed until a debug-validation version passes all gates, 14/14 detector OOF caches are complete, and validation thresholds are locked.
+3. Reproduce same-cache fixed NMS=0.3 before comparing E1.1.
+4. Run R0→R1→R2→R3→R4 in order; do not jump directly to a combined search.
+5. Report all 3 arbitrator seeds, all operating points, and failed variants.
+6. Use the project’s existing COCO evaluator for AP50/AP75/AP50:95.
+7. Do not commit datasets, `.npz` caches, weights, checkpoints, predictions, or `runs/`.
+8. Add or update tests for every change to safe-set construction, residual scoring, or extra admission.
+9. Do not restore A6 physics; it was experimentally rejected.
+10. Do not introduce P2, SAHI, CARAFE, DySample, wavelets, detector-loss changes, or YOLO26 migration in E1.1.
 
 ## First commands
 
@@ -22,16 +45,34 @@ Current scope is only E1: frozen RGB/POL detector candidate caching plus a light
 pip install -e .[dev]
 pytest -q
 python scripts/make_toy_cache.py --output /tmp/potato_e1_toy
-python scripts/validate_cache.py --manifest /tmp/potato_e1_toy/manifest.jsonl --root /tmp/potato_e1_toy --require-oof-train
-python -m potato_e1.train \
-  --config configs/e1_transformer.yaml \
+python scripts/validate_cache.py \
+  --manifest /tmp/potato_e1_toy/manifest.jsonl \
+  --root /tmp/potato_e1_toy
+python -m potato_e1.train_e11 \
+  --config configs/e1_1_residual.yaml \
   data.manifest=/tmp/potato_e1_toy/manifest.jsonl \
   data.root=/tmp/potato_e1_toy \
   data.appearance_dim=16 \
-  data.physics_dim=8 \
   data.num_workers=0 \
   train.epochs=2 \
-  output_dir=/tmp/potato_e1_run
+  output_dir=/tmp/potato_e11_run
+python -m potato_e1.evaluate_e11 \
+  --config configs/e1_1_residual.yaml \
+  --checkpoint /tmp/potato_e11_run/best.pt \
+  --split val \
+  data.manifest=/tmp/potato_e1_toy/manifest.jsonl \
+  data.root=/tmp/potato_e1_toy
 ```
 
-Before touching the real detector integration, make the toy-cache pipeline and tests pass.
+If the evaluation CLI does not yet accept dotted overrides, fix that before real experiments or provide a resolved config file. Do not work around it by editing the committed default paths.
+
+## Required acceptance gates
+
+```text
+AP50:95 >= 0.4547
+Recall >= 0.8596
+FP/image <= 0.248
+Destruction <= 0.0251
+```
+
+The program must also verify for every image that all fixed-NMS safe boxes and classes are present unchanged in the E1.1 output.
