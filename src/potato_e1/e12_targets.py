@@ -159,18 +159,22 @@ def build_rollback_targets(
     gt_boxes: torch.Tensor,
     gt_classes: torch.Tensor,
     *,
+    modality: torch.Tensor | None = None,
     candidate_conf_min: float = 0.01,
     base_conf: float = 0.25,
     base_nms_iou: float = 0.30,
     positive_iou: float = 0.50,
     max_safe_candidates: int | None = None,
     max_rollback_candidates: int | None = None,
+    include_nms: bool = True,
+    include_low_conf: bool = True,
+    include_rgb: bool = True,
+    include_pol: bool = True,
 ) -> RollbackTargets:
-    """Build the immutable safe set and the bidirectional rollback pool.
+    """Build the immutable safe set and configurable bidirectional rollback pool.
 
-    The pool is prediction-only: NMS-suppressed candidates plus candidates below
-    ``base_conf`` but above ``candidate_conf_min``. GT is used only for training
-    targets, never for pool construction.
+    Pool construction uses predictions only. GT is used solely to construct training
+    targets. Source and modality switches exist for T1/T2 and RGB/POL ablations.
     """
     trace = trace_classwise_nms(
         boxes,
@@ -185,13 +189,21 @@ def build_rollback_targets(
 
     safe_mask = torch.zeros(len(boxes), dtype=torch.bool, device=boxes.device)
     safe_mask[safe_indices] = True
-    nms_indices = torch.nonzero(trace.suppressed_by >= 0, as_tuple=False).flatten()
-    low_conf_indices = torch.nonzero(
-        (scores >= float(candidate_conf_min))
-        & (scores < float(base_conf))
-        & ~safe_mask,
-        as_tuple=False,
-    ).flatten()
+    nms_indices = (
+        torch.nonzero(trace.suppressed_by >= 0, as_tuple=False).flatten()
+        if include_nms
+        else torch.empty(0, dtype=torch.long, device=boxes.device)
+    )
+    low_conf_indices = (
+        torch.nonzero(
+            (scores >= float(candidate_conf_min))
+            & (scores < float(base_conf))
+            & ~safe_mask,
+            as_tuple=False,
+        ).flatten()
+        if include_low_conf
+        else torch.empty(0, dtype=torch.long, device=boxes.device)
+    )
 
     rollback_indices = torch.cat((nms_indices, low_conf_indices))
     rollback_source = torch.cat(
@@ -200,6 +212,18 @@ def build_rollback_targets(
             torch.full_like(low_conf_indices, SOURCE_LOW_CONF),
         )
     )
+    if modality is not None and rollback_indices.numel():
+        allowed = torch.zeros(len(rollback_indices), dtype=torch.bool, device=boxes.device)
+        if include_rgb:
+            allowed |= modality[rollback_indices] == 0
+        if include_pol:
+            allowed |= modality[rollback_indices] == 1
+        rollback_indices = rollback_indices[allowed]
+        rollback_source = rollback_source[allowed]
+    elif not include_rgb and not include_pol:
+        rollback_indices = rollback_indices[:0]
+        rollback_source = rollback_source[:0]
+
     if rollback_indices.numel():
         order = torch.argsort(scores[rollback_indices], descending=True, stable=True)
         rollback_indices = rollback_indices[order]
