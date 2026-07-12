@@ -1,0 +1,70 @@
+seed: 47
+output_dir: runs/e1_1_residual
+
+data:
+  manifest: null
+  root: null
+  train_split: train
+  val_split: val
+  test_split: test
+  topk_per_modality: 64
+  appearance_dim: 0
+  physics_dim: 0
+  positive_iou: 0.50
+  num_workers: 4
+  base_conf: 0.25
+  base_nms_iou: 0.30
+
+model:
+  d_model: 128
+  nhead: 4
+  num_layers: 2
+  dim_feedforward: 256
+  dropout: 0.10
+
+loss:
+  residual_alpha: 0.50
+  quality_weight: 1.0
+  score_weight: 1.0
+  ranking_weight: 1.0
+  rescue_weight: 1.0
+  delta_reg_weight: 0.05
+  ranking_margin: 0.10
+  focal_alpha: 0.25
+  focal_gamma: 2.0
+
+train:
+  batch_size: 16
+  epochs: 80
+  lr: 0.0003
+  weight_decay: 0.0001
+  grad_clip_norm: 5.0
+  amp: true
+  early_stop_patience: 15
+
+arbitration:
+  base_conf: 0.25
+  base_nms_iou: 0.30
+  residual_alpha: 0.50
+  rescue_threshold: 0.80
+  extra_quality_threshold: 0.50
+  extra_score_floor: 0.10
+  extra_overlap_iou: 0.30
+  max_extra_per_image: 1
+
+search:
+  residual_alpha: [0.25, 0.50, 1.00]
+  rescue_threshold: [0.50, 0.60, 0.70, 0.80, 0.90, 0.95]
+  extra_quality_threshold: [0.30, 0.40, 0.50, 0.60]
+  extra_score_floor: [0.05, 0.10, 0.15, 0.20, 0.25]
+  max_extra_per_image: [0, 1]
+  fp_per_image_limit: 0.248
+  destruction_limit: 0.0251
+  recall_floor: 0.8596
+  ap50_95_floor: 0.4547
+
+evaluation:
+  match_iou: 0.50
+  base_conf: 0.25
+  save_predictions: true
+  require_locked_thresholds_for_test: true
