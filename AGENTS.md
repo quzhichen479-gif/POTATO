@@ -1,103 +1,79 @@
-# Codex instructions for POTATO
+# Codex instructions for POTATO SRTH V1
 
 Read in this exact order:
 
-1. `README.md`
-2. `docs/E1_2_IMPLEMENTATION_SPEC.md`
-3. the current E1.2 GitHub issue
+1. `CODEX_SRTH_V1_IMPLEMENTATION_README.md`
+2. `docs/SRTH_V1_IMPLEMENTATION_SPEC.md`
+3. `configs/srth_v1.yaml`
+4. current SRTH GitHub issue/PR
 
-The old E1/E1.1 files are retained only to reproduce failed ablations. Do not continue tuning the full-authority E1 arbitrator or the POL-only E1.1 extra branch.
+## External project boundary
+
+YOLO26 source, YAML/model files, weights, dataset code and the working CUDA environment are local in `PythonProject2`, not in POTATO.
+
+Use the existing PythonProject2 CUDA interpreter. Install POTATO into that environment with:
+
+```text
+python -m pip install -e <path-to-POTATO> --no-deps
+```
+
+Never replace the working CUDA PyTorch build with a CPU package. Do not vendor the full PythonProject2/YOLO26 tree into POTATO. Do not commit absolute local paths.
 
 ## Current scope
 
-Current scope is only **E1.2: bidirectional suppression-confidence rollback Transformer**.
+Only implement SRTH V1:
 
-The fixed cross-modal NMS output is an immutable safe set. The learned model may:
+- RGB complete primary path;
+- lightweight DIF and POL adapters;
+- P3/P4 independent spatial sigmoid gates;
+- empirical Oracle route supervision from grouped OOF predictions;
+- physical/statistical heuristic logit prior;
+- RGB P5 passthrough;
+- original YOLO26 neck/head/assignment/base loss unchanged.
 
-- apply a bounded score residual to safe-set scores;
-- inspect RGB/POL NMS-suppressed candidates;
-- inspect RGB/POL low-confidence candidates;
-- choose one rollback candidate or NONE with a set-wise selector;
-- append at most one candidate per image.
+Do not implement EfficientViM, Mamba, HyperACE, a hypergraph, a new detection head or late-fusion inference in this phase.
 
-The learned model may not:
+## Data and leakage rules
 
-- delete, replace, move, merge, or relabel safe-set candidates;
-- restore more than one candidate per image;
-- ban NMS rollback candidates merely because they overlap the suppressor;
-- use GT-derived inference features;
-- use physical features;
-- introduce unrelated detector changes.
-
-## Non-negotiable rules
-
-1. Never use test data to select thresholds, losses, checkpoints, features, source pools, score formulas, or ablations.
-2. Keep test sealed until debug validation passes all gates, 14/14 group-aware detector OOF caches are complete, and validation thresholds are locked.
-3. Reproduce same-cache T0 fixed NMS=0.3 before comparing E1.2.
-4. Run T0→T1→T2→T3→T4→T5→T6 in order.
-5. Report seeds 41/47/53, all operating points, and all failed variants.
-6. Use the project’s existing COCO evaluator for AP50/AP75/AP50:95.
-7. Run the O1/O2 Oracle AP audit before claiming the selector is the remaining bottleneck.
-8. Do not commit datasets, `.npz` caches, detector weights, checkpoints, predictions, or `runs/` artifacts.
-9. Add or update tests for every change to NMS trace, rollback-pool construction, target selection, or safe-set preservation.
-10. Do not restore A6 physics; it was experimentally rejected.
-11. Do not introduce P2, SAHI, CARAFE, DySample, wavelets, detector-loss changes, or YOLO26 migration in E1.2.
-
-## First commands
-
-```bash
-pip install -e .[dev]
-pytest -q
-python scripts/make_toy_cache.py --output /tmp/potato_e1_toy
-python scripts/validate_cache.py \
-  --manifest /tmp/potato_e1_toy/manifest.jsonl \
-  --root /tmp/potato_e1_toy
-python -m potato_e1.train_e12 \
-  --config configs/e1_2_rollback.yaml \
-  data.manifest=/tmp/potato_e1_toy/manifest.jsonl \
-  data.root=/tmp/potato_e1_toy \
-  data.appearance_dim=16 \
-  data.num_workers=0 \
-  train.epochs=2 \
-  output_dir=/tmp/potato_e12_run
-python -m potato_e1.evaluate_e12 \
-  --config configs/e1_2_rollback.yaml \
-  --checkpoint /tmp/potato_e12_run/best.pt \
-  --split val \
-  data.manifest=/tmp/potato_e1_toy/manifest.jsonl \
-  data.root=/tmp/potato_e1_toy \
-  data.appearance_dim=16 \
-  data.num_workers=0
-```
+1. RGB/DIF/POL geometric transforms must remain aligned.
+2. Route targets must come from grouped OOF single-modality predictions.
+3. No detector may generate route labels for images used to train that detector fold.
+4. Never use test to design modules, targets, thresholds, heuristics or ablations.
+5. Never use a GT-derived input feature at inference.
+6. Do not commit images, datasets, weights, OOF caches, checkpoints, predictions or `runs/`.
 
 ## Required invariants
 
-For every image:
-
 ```text
-safe output count == T0 safe count
-safe output boxes == T0 safe boxes
-safe output classes == T0 safe classes
-restore_count in {0, 1}
+P3/P4 output spatial shapes == RGB P3/P4 shapes
+P5 output is unchanged RGB P5
+initial fused P3/P4 is numerically close to RGB
+DIF and POL gates are independent sigmoid gates
+YOLO26 Detect output contract is unchanged
+original YOLO26 detection loss remains intact
 ```
 
-Destruction must be a non-negative rate. Report separately:
+## First local commands
+
+Run from the existing PythonProject2 CUDA environment:
 
 ```text
-destruction_rate
-delta_destruction_vs_r0
-restored_protected_gt
-newly_destroyed_protected_gt
-net_protected_gain
+python scripts/check_srth_cuda_env.py --yolo-root <path-to-PythonProject2>
+python -m pip install -e <path-to-POTATO> --no-deps
+OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 pytest -q tests/test_srth_v1.py
+python scripts/srth_v1_smoke.py --device cuda:0
 ```
 
-## Required acceptance gates
+## Experiment order
 
 ```text
-AP50:95 >= 0.4547
-Recall >= 0.8596
-FP/image <= 0.248
-Destruction <= 0.0251
+S0 RGB-only
+S1 RGB + DIF direct add
+S2 RGB + POL direct add
+S3 tri-modal concat/add
+S4 learned gates, no heuristic
+S5 heuristic prior, no Oracle route loss
+S6 full SRTH V1
 ```
 
-Do not start 14/14 detector OOF generation until one debug-validation E1.2 variant passes all four gates across the required three arbitrator seeds.
+After a correct one-seed debug run, use seeds 41/47/53 and report all failed variants.
