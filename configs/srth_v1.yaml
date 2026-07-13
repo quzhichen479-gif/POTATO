@@ -1,0 +1,87 @@
+experiment:
+  name: srth_v1
+  seed: 41
+  test_split_sealed: true
+
+external_yolo26:
+  # YOLO26 source, weights, data and CUDA environment are local and are NOT in POTATO.
+  project_root: "<LOCAL_WORKSPACE>/PythonProject2"
+  import_module: ultralytics
+  use_existing_cuda_environment: true
+  device: cuda:0
+  amp: true
+  vendor_yolo_into_potato: false
+
+modalities:
+  rgb: RGB
+  dif: DIF
+  pol: POL
+  heuristic_channels:
+    - target_scale_proxy
+    - dolp_mean
+    - dolp_std
+    - hsv_saturation
+    - intensity_s0_std
+    - saturation_ratio
+
+model:
+  fuse_levels: [p3, p4]
+  passthrough_levels: [p5]
+  # Codex must replace these placeholders with the actual PythonProject2 feature widths.
+  channels:
+    p3: {rgb: null, dif: null, pol: null}
+    p4: {rgb: null, dif: null, pol: null}
+  hidden_channels: 64
+  route_temperature: 1.0
+  heuristic_logit_scale: 1.0
+  residual_scale_init: 0.001
+  dropout: 0.0
+  independent_sigmoid_gates: true
+  preserve_rgb_identity_path: true
+
+oracle_targets:
+  source: grouped_oof_single_modality_predictions
+  use_test_predictions: false
+  hit_iou_threshold: 0.5
+  iou_weight: 0.7
+  route_temperature: 0.1
+  center_fraction:
+    p3: 0.60
+    p4: 0.75
+
+loss:
+  route_weight: 1.0
+  prior_consistency_weight: 0.15
+  smoothness_weight: 0.02
+  gate_budget_weight: 0.02
+  max_gate_mean: 0.65
+  # YOLO26 owns the original detection loss. SRTH V1 only adds auxiliary routing loss.
+  modify_yolo_detection_loss: false
+
+training:
+  freeze_rgb_warmup_epochs: 1
+  router_warmup_epochs: 3
+  total_epochs: null
+  optimizer: inherit_from_local_yolo26
+  dataloader: inherit_from_local_yolo26
+  cuda_required: true
+  save_route_visualizations: true
+
+evaluation:
+  seeds: [41, 47, 53]
+  metrics:
+    - AP50_95
+    - AP50
+    - AP75
+    - APs
+    - recall
+    - fp_per_image
+    - rescue_rate
+    - destruction_rate
+    - fp_matched_net_tp
+  compare_against:
+    - RGB_only
+    - late_fusion_nms_fp_matched
+    - RGB_DIF_add
+    - RGB_POL_add
+    - tri_modal_concat
